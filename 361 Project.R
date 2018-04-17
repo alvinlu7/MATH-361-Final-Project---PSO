@@ -1,3 +1,4 @@
+
 # library(ggplot2)
 # library(remotes)
 # Sys.setenv(PATH = paste("C:/PROGRA~1/ImageMagick-7.0.7-Q16",
@@ -7,10 +8,12 @@
 
 # ***** GLOBAL VARIABLES *****#
 #Adjustable values for simulation
-local_weight = 3.5
-global_weight = 2
+reps = 10
 
-num_drones = 100
+local_weight = 10
+global_weight = 1
+
+num_drones = 50
 speed = 1
 vision = 4
 harvest_rate = 1
@@ -25,6 +28,8 @@ global_best <<- c(0,0)
 g_max_conc <<- 0
 
 field = matrix(rep(0, dimension**2),nrow = dimension, ncol=dimension)
+saved_field = matrix(rep(0, dimension**2),nrow = dimension, ncol=dimension)
+
 directions = matrix(c(1,0,1,1,0,1,-1,1,-1,0,-1,-1,0,-1,1,-1),ncol=2, byrow=TRUE)
 
 #***** FUNCTIONS *****#
@@ -47,7 +52,7 @@ graph = function(drones,i){
   
   #Graph the plastic particle locations with larger concentrations being bigger
   plot(x, y, xlim=c(1,dimension), ylim=c(1,dimension), col="#68CBFF", pch = 20, cex = values/2, main = paste(i))
-
+  
   #Add text to each point showing its concentration
   if(length(values)!=0) { text(x, y, labels=values) }
   #Plot the drones
@@ -135,8 +140,8 @@ harvest = function(drone){
   y = drone$coord_y
   field[x,y] = field[x,y] - harvest_rate
   if(c(x,y) == global_best && field[x,y] == 0){
-     global_best <<- c(0,0)
-     g_max_conc <<- 0
+    global_best <<- c(0,0)
+    g_max_conc <<- 0
   }
   return (field)
 }
@@ -162,8 +167,11 @@ scan = function(drones){
       for(j in -vision:vision){ #loop through "offset y", ""
         x = drones[k,]$coord_x + i #apply the offsets to its current position
         y = drones[k,]$coord_y + j
-
+        
         if(in_bounds(x,y)){ #check if current (x,y) is in simulation boundary
+          saved_field[x,y] <<- field[x,y]
+          #dfsaved = update_saved()
+        
           if(field[x,y] > max_conc){ #Update local_best and its associated concentration 
             # if the current patch is better than what we have seen so far
             max_conc <<- field[x,y]
@@ -172,9 +180,11 @@ scan = function(drones){
         }
       }
     }
-    if(max_conc > g_max_conc){ #Update global best if this drone's local best is better
-      global_best <<- local_best
-      g_max_conc <<- max_conc
+    g_max_conc <<- max(saved_field)
+    global_best <<- which(saved_field == max(saved_field), arr.ind = T)
+    global_best <<- global_best[1,]
+    while (max_conc == 0 && g_max_conc == 0){
+      return(random_move(drones))
     }
     
     #Assign temp local best to the drone object itself
@@ -184,6 +194,8 @@ scan = function(drones){
   
   return (drones)
 }
+
+
 
 #Initialize the field with random concentrations
 initialize = function(sparseness, max_particle_conc){
@@ -226,29 +238,34 @@ init_drones = function(){
 #***** ACTUAL EXECUTION OF PROGRAM *****#
 #Create an array of drones
 
+history = c(rep(NA, reps))
+for (x in 1:reps){
+
 field = initialize(sparseness, max_particle_conc)
 df_drones = init_drones()
 
 i = 0
 #saveGIF({
-   repeat{
-    
-    if(sum(field != 0) == 0){ #Everything is harvested
-      break
-    }
-    
-    df_drones <- scan(df_drones)
-    for(n in 1:num_drones){
-      if(field[df_drones[n,]$coord_x, df_drones[n,]$coord_y] == 0){ #Nothing to harvest
-        df_drones[n,] <- move(df_drones[n,])
-      }
-      else{ #Harvest the plastic at current patch
-        field <- harvest(df_drones[n,])
-      }
-    }
-    i=i+1
-    graph(df_drones,i)
-    print(i)
+repeat{
+  
+  if(sum(field != 0) == 0){ #Everything is harvested
+    break
   }
-#}) 
-
+  
+  df_drones <- scan(df_drones)
+  for(n in 1:num_drones){
+    if(field[df_drones[n,]$coord_x, df_drones[n,]$coord_y] == 0){ #Nothing to harvest
+      df_drones[n,] <- move(df_drones[n,])
+    }
+    else{ #Harvest the plastic at current patch
+      field <- harvest(df_drones[n,])
+    }
+  }
+  i=i+1
+  graph(df_drones,i)
+  print(i)
+}
+history[x] = i
+#})
+}
+print(paste("The mean time steps for this optimization setting is: ", mean(history)))
