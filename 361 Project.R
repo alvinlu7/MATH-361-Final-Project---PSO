@@ -5,19 +5,23 @@
 # library(animation)
 # ani.options(convert = 'C:/PROGRA~1/ImageMagick-7.0.7-Q16/convert.exe', interval=0.1)
 
+library(parallel)
+
 # ***** GLOBAL VARIABLES *****#
 #Adjustable values for simulation
-local_weight = 3.5
+local_weight = 20
 global_weight = 2
 
 num_drones = 100
 speed = 1
-vision = 4
+vision <<- 2
 harvest_rate = 1
 
-dimension = 20
+dimension = 50
 sparseness = 5
 max_particle_conc = 10
+
+system_cores = detectCores()
 
 
 #For use by program
@@ -31,23 +35,16 @@ directions = matrix(c(1,0,1,1,0,1,-1,1,-1,0,-1,-1,0,-1,1,-1),ncol=2, byrow=TRUE)
 #Graphs the field with the drones in it at a certain time-step
 graph = function(drones,i){
   #Get all the non-zero values out of the field along with all of their associated coord
+  
   nonzero = which(field != 0, arr.ind = T)
   x = nonzero[,"row"]
   y = nonzero[,"col"]
   values = field[nonzero]
   vis = data.frame(x,y,values)
   
-  
-  #In-progress better visualization using ggplot and gganimate
-  # theme_set(theme_bw())
-  # p <- ggplot(data = vis, aes(x=x, y=y, colour=values, frame = i)) + geom_point(size = values) +
-  #   annotate("point", x=drone1@coord[1], y=drone1@coord[2], shape = 6) +
-  #   annotate("text", x=x, y=y, label=values, size = 5) + scale_colour_gradientn(colours=rainbow(4))
-  # gganimate(p)
-  
   #Graph the plastic particle locations with larger concentrations being bigger
-  plot(x, y, xlim=c(1,dimension), ylim=c(1,dimension), col="#68CBFF", pch = 20, cex = values/2, main = paste(i))
-
+  plot(x, y, xlim=c(1,dimension), ylim=c(1,dimension), col="#68CBFF", pch = 20, cex = values/max_particle_conc*7, main = paste(i))
+  
   #Add text to each point showing its concentration
   if(length(values)!=0) { text(x, y, labels=values) }
   #Plot the drones
@@ -134,55 +131,49 @@ harvest = function(drone){
   x = drone$coord_x
   y = drone$coord_y
   field[x,y] = field[x,y] - harvest_rate
-  if(c(x,y) == global_best && field[x,y] == 0){
-     global_best <<- c(0,0)
-     g_max_conc <<- 0
-  }
+  # if(c(x,y) == global_best && field[x,y] == 0){
+  #   global_best <<- c(0,0)
+  #   g_max_conc <<- 0
+  # }
   return (field)
 }
-
-#Decide whether the drone should move or stay and harvest the patch
-#NOTE: If it sees a better patch while it's harvesting, should it move? 
-#This doesn't need to be a function unless we're answering that question
-# action = function(drone){
-#   return (drone)
-# }
 
 #Takes a drone object, scans its surroundings for the highest concentration patch, and
 #updates its "local_best" variable accordingly
 scan = function(drones){
   
-  for(k in 1:num_drones){ #scan for each drone
-    
-    #initialize some variables before inner loop for scanning
+  dimension=dimension
+  field = field
+  
+  r = foreach(kr=iter(drones,by="row"), .combine = rbind) %dopar%{
     local_best = c(0,0)
-    max_conc <<- 0
-    
+    max_conc = 0
+    vision = 4
     for(i in -vision:vision){ #loop though "offset x", stay within boundaries of vision 
       for(j in -vision:vision){ #loop through "offset y", ""
-        x = drones[k,]$coord_x + i #apply the offsets to its current position
-        y = drones[k,]$coord_y + j
-
-        if(in_bounds(x,y)){ #check if current (x,y) is in simulation boundary
+        x = kr$coord_x + i #apply the offsets to its current position
+        y = kr$coord_y + j
+        
+        if(((x >= 1 && x <= dimension) && (y >= 1 && y <= dimension))){ #check if current (x,y) is in simulation boundary
           if(field[x,y] > max_conc){ #Update local_best and its associated concentration 
             # if the current patch is better than what we have seen so far
-            max_conc <<- field[x,y]
+            max_conc <- field[x,y]
             local_best = c(x,y)
           }
         }
       }
     }
-    if(max_conc > g_max_conc){ #Update global best if this drone's local best is better
-      global_best <<- local_best
-      g_max_conc <<- max_conc
-    }
     
     #Assign temp local best to the drone object itself
-    drones[k,]$local_best_x <- local_best[1] 
-    drones[k,]$local_best_y <- local_best[2] 
+    kr$local_best_x <- local_best[1] 
+    kr$local_best_y <- local_best[2] 
+    kr$concentration <- max_conc
+    return(kr)
   }
-  
-  return (drones)
+  max = r[which.max(df_drones$concentration),]
+  g_max_conc <<- max$concentration
+  global_best <<- c(max$local_best_x,max$local_best_y)
+  return (r)
 }
 
 #Initialize the field with random concentrations
@@ -198,7 +189,7 @@ initialize = function(sparseness, max_particle_conc){
       }
     }
   }
-  return (field)
+  return (data.frame(field))
 }
 
 #Creates a dataframe of drones with randomly initialized coordinates
@@ -209,6 +200,7 @@ init_drones = function(){
   dir_y = vector("numeric", length = num_drones)
   local_best_x = vector("numeric", length = num_drones)
   local_best_y = vector("numeric", length = num_drones)
+  concentration = vector("numeric", length = num_drones)
   
   for(i in 1:num_drones){
     coord_x[i] = sample(1:dimension, 1)
@@ -219,36 +211,68 @@ init_drones = function(){
     local_best_y[i] = 0
   }
   
-  return (data.frame(coord_x,coord_y,dir_x,dir_y,local_best_x,local_best_y))
+  return (data.frame(coord_x,coord_y,dir_x,dir_y,local_best_x,local_best_y,concentration))
 }
 
 #************************************************************************************#
 #***** ACTUAL EXECUTION OF PROGRAM *****#
 #Create an array of drones
 
-field = initialize(sparseness, max_particle_conc)
-df_drones = init_drones()
+library(doParallel)
+
+cl <<- makeCluster(detectCores())
+registerDoParallel(cl)
+
+field <<- initialize(sparseness, max_particle_conc)
+df_drones <- init_drones()
+
+total_particles = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
+  sum(b) 
+}
+
+acceptable <- total_particles*0.05
 
 i = 0
 #saveGIF({
-   repeat{
-    
-    if(sum(field != 0) == 0){ #Everything is harvested
-      break
-    }
-    
-    df_drones <- scan(df_drones)
-    for(n in 1:num_drones){
-      if(field[df_drones[n,]$coord_x, df_drones[n,]$coord_y] == 0){ #Nothing to harvest
-        df_drones[n,] <- move(df_drones[n,])
-      }
-      else{ #Harvest the plastic at current patch
-        field <- harvest(df_drones[n,])
-      }
-    }
-    i=i+1
-    graph(df_drones,i)
-    print(i)
+repeat{
+  
+  r = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
+    sum(b) 
   }
+  
+  if(sum(r) < acceptable){ #Everything is harvested
+    break
+  }
+  print(paste("Iteration",i))
+  df_drones <- scan(df_drones)
+  
+  to_harvest <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
+    if(field[drone$coord_x, drone$coord_y] > 0){ #Harvest this patch
+      return(c(drone$coord_x,drone$coord_y))
+    }
+  }
+  
+  df_drones <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
+    if(field[drone$coord_x, drone$coord_y] == 0){ #Nothing to harvest
+      return (move(drone))
+    }
+    return(drone)
+  }
+  
+  if(!is.null(to_harvest)){
+    for(k in 1:dim(to_harvest)[1]){
+      x = to_harvest[k,1]
+      y = to_harvest[k,2]
+      if(field[x,y]>0){
+        field[x,y] <- field[x,y] - 1
+      }
+    }
+  }
+  
+  i=i+1
+  #graph(df_drones,i)
+  
+}
 #}) 
+stopCluster(cl)
 
