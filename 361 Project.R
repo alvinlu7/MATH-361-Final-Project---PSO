@@ -9,15 +9,15 @@ library(parallel)
 
 # ***** GLOBAL VARIABLES *****#
 #Adjustable values for simulation
-local_weight = 20
-global_weight = 2
+local_weight = 50
+global_weight = 1
 
 num_drones = 100
 speed = 1
 vision <<- 2
 harvest_rate = 1
 
-dimension = 50
+dimension = 20
 sparseness = 5
 max_particle_conc = 10
 
@@ -223,56 +223,88 @@ library(doParallel)
 cl <<- makeCluster(detectCores())
 registerDoParallel(cl)
 
-field <<- initialize(sparseness, max_particle_conc)
-df_drones <- init_drones()
+ratios = c(0.5,1,2,4,8,16,32,64,128,256,512,1024,5000)
+mean_iterations = vector("numeric",length=length(ratios))
+mean_ideal = vector("numeric",length=length(ratios))
 
-total_particles = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
-  sum(b) 
-}
+reps = 1
 
-acceptable <- total_particles*0.05
+final_data = data.frame(ratios, mean_iterations, mean_ideal)
 
-i = 0
-#saveGIF({
-repeat{
+for (l in 1:length(ratios)){
   
-  r = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
-    sum(b) 
-  }
+  mean = 0
+  iterations = vector(length=reps)
+  ideal_it = vector(length=reps)
+  history = data.frame(iterations,ideal_it)
   
-  if(sum(r) < acceptable){ #Everything is harvested
-    break
-  }
-  print(paste("Iteration",i))
-  df_drones <- scan(df_drones)
+  local_weight <<-ratios[l]
   
-  to_harvest <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
-    if(field[drone$coord_x, drone$coord_y] > 0){ #Harvest this patch
-      return(c(drone$coord_x,drone$coord_y))
+  for(j in 1:reps){
+
+    field <<- initialize(sparseness, max_particle_conc)
+    df_drones <- init_drones()
+    
+    total_particles = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
+      sum(b) 
     }
-  }
-  
-  df_drones <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
-    if(field[drone$coord_x, drone$coord_y] == 0){ #Nothing to harvest
-      return (move(drone))
-    }
-    return(drone)
-  }
-  
-  if(!is.null(to_harvest)){
-    for(k in 1:dim(to_harvest)[1]){
-      x = to_harvest[k,1]
-      y = to_harvest[k,2]
-      if(field[x,y]>0){
-        field[x,y] <- field[x,y] - 1
+    
+    total_particles = sum(total_particles)
+    acceptable <- total_particles*0.5
+    ideal_iter <- total_particles/(num_drones*harvest_rate)
+
+    i = 0
+    #saveGIF({
+    repeat{
+      
+      r = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
+        sum(b) 
       }
+      total = sum(r)
+      if(total < acceptable){ #Everything is harvested
+        print(paste("Ideal iterations: ", ideal_iter))
+        history[j,]$iterations <- i
+        history[j,]$ideal_it <- ideal_iter
+        break
+      }
+      
+      print(paste("Iteration",i,"% Left: ",total/total_particles))
+      df_drones <- scan(df_drones)
+      
+      to_harvest <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
+        if(field[drone$coord_x, drone$coord_y] > 0){ #Harvest this patch
+          return(c(drone$coord_x,drone$coord_y))
+        }
+      }
+      
+      df_drones <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
+        if(field[drone$coord_x, drone$coord_y] == 0){ #Nothing to harvest
+          return (move(drone))
+        }
+        return(drone)
+      }
+      
+      if(!is.null(to_harvest)){
+        for(k in 1:dim(to_harvest)[1]){
+          x = to_harvest[k,1]
+          y = to_harvest[k,2]
+          if(field[x,y]>0){
+            field[x,y] <- field[x,y] - 1
+          }
+        }
+      }
+      
+      i=i+1
+      graph(df_drones,i)
+      
     }
+    #}) 
   }
-  
-  i=i+1
-  #graph(df_drones,i)
-  
+  final_data[l,]$mean_iterations = mean(history$iterations)
+  final_data[l,]$mean_ideal = mean(history$ideal_it)
 }
-#}) 
+mean(history$iterations)
+name = paste("simulation",Sys.time(),".csv")
+write.csv(final_data, file = name)
+plot(final_data$ratios, final_data$mean_iterations/final_data$mean_ideal)
 stopCluster(cl)
-
