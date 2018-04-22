@@ -17,7 +17,7 @@ speed = 1
 vision <<- 2
 harvest_rate = 1
 
-dimension = 20
+dimension = 25
 sparseness = 5
 max_particle_conc = 10
 
@@ -227,7 +227,7 @@ ratios = c(0.5,1,2,4,8,16,32,64,128,256,512,1024,5000)
 mean_iterations = vector("numeric",length=length(ratios))
 mean_ideal = vector("numeric",length=length(ratios))
 
-reps = 1
+reps = 10
 
 final_data = data.frame(ratios, mean_iterations, mean_ideal)
 
@@ -251,7 +251,7 @@ for (l in 1:length(ratios)){
     
     total_particles = sum(total_particles)
     acceptable <- total_particles*0.5
-    ideal_iter <- total_particles/(num_drones*harvest_rate)
+    ideal_iter <- acceptable/(num_drones*harvest_rate)
 
     i = 0
     #saveGIF({
