@@ -5,37 +5,39 @@
 # library(animation)
 # ani.options(convert = 'C:/PROGRA~1/ImageMagick-7.0.7-Q16/convert.exe', interval=0.1)
 
-library(parallel)
-
 # ***** GLOBAL VARIABLES *****#
-#Adjustable values for simulation
+# *** Adjustable values for simulation ***
+
+library(doParallel)
+
+#Particle swarm optimization formula weights
 local_weight = 50
 global_weight = 1
 
-num_drones = 100
-speed = 1
-vision <<- 2
-harvest_rate = 1
 
-dimension = 25
-sparseness = 5
-max_particle_conc = 10
+num_drones = 100 #number of drones in simulation
+speed = 1 #radius of neighborhood that drones are allowed to move in
+vision <<- 2 # "" are allowed to scan at each time-step
+harvest_rate = 1 #no. of plastic particles one drone can pick up per time-step
 
-system_cores = detectCores()
+dimension = 25 #simulation space is a dimensionxdimension matrix
+sparseness = 5 #every 1:sparseness patches in simulation has plastic particles
+max_particle_conc = 10 #maximum plastic particles in a patch
 
-
-#For use by program
-global_best <<- c(0,0)
+# *** For use by program ***
+global_best <<- c(0,0) #Location of the patch with largest concentration
 g_max_conc <<- 0
 
-field = matrix(rep(0, dimension**2),nrow = dimension, ncol=dimension)
-directions = matrix(c(1,0,1,1,0,1,-1,1,-1,0,-1,-1,0,-1,1,-1),ncol=2, byrow=TRUE)
+field = matrix(rep(0, dimension**2),nrow = dimension, ncol=dimension) #representation of simulation space
+directions = matrix(c(1,0,1,1,0,1,-1,1,-1,0,-1,-1,0,-1,1,-1),ncol=2, byrow=TRUE) #matrix representation of 8 directions
+
+system_cores = detectCores() #max cores for parellelization
 
 #***** FUNCTIONS *****#
 #Graphs the field with the drones in it at a certain time-step
 graph = function(drones,i){
-  #Get all the non-zero values out of the field along with all of their associated coord
   
+  #Get all the non-zero values out of the field along with all of their associated coord
   nonzero = which(field != 0, arr.ind = T)
   x = nonzero[,"row"]
   y = nonzero[,"col"]
@@ -93,6 +95,7 @@ pso_velocity = function(drone){
   if(all(global_best == c(0,0))){ r2 = 0 }#don't factor in deltas if the best DNE
   if(all(local_best == c(0,0))){ r1 = 0 }
   
+  #This is the core formula by Eberhart and Kennedy
   new_v = local_weight * r1 * delta_local + global_weight * r2 * delta_global
   return (round_direction(new_v))
 }
@@ -125,19 +128,6 @@ move = function(drone){
   }
 }
 
-#Harvests the plastic at the current location at the drone's collection speed
-#May need to check for negative values - "overshooting"
-harvest = function(drone){
-  x = drone$coord_x
-  y = drone$coord_y
-  field[x,y] = field[x,y] - harvest_rate
-  # if(c(x,y) == global_best && field[x,y] == 0){
-  #   global_best <<- c(0,0)
-  #   g_max_conc <<- 0
-  # }
-  return (field)
-}
-
 #Takes a drone object, scans its surroundings for the highest concentration patch, and
 #updates its "local_best" variable accordingly
 scan = function(drones){
@@ -145,6 +135,7 @@ scan = function(drones){
   dimension=dimension
   field = field
   
+  #Scan the surroundings of each drone in parallel
   r = foreach(kr=iter(drones,by="row"), .combine = rbind) %dopar%{
     local_best = c(0,0)
     max_conc = 0
@@ -164,12 +155,13 @@ scan = function(drones){
       }
     }
     
-    #Assign temp local best to the drone object itself
+    #Update drone local best using temp variable
     kr$local_best_x <- local_best[1] 
     kr$local_best_y <- local_best[2] 
     kr$concentration <- max_conc
     return(kr)
   }
+  #Assign global best values
   max = r[which.max(df_drones$concentration),]
   g_max_conc <<- max$concentration
   global_best <<- c(max$local_best_x,max$local_best_y)
@@ -218,21 +210,24 @@ init_drones = function(){
 #***** ACTUAL EXECUTION OF PROGRAM *****#
 #Create an array of drones
 
-library(doParallel)
-
+#Set up parellelization
 cl <<- makeCluster(detectCores())
 registerDoParallel(cl)
 
+#Used for testing multiple global/local weight ratios
 ratios = c(0.5,1,2,4,8,16,32,64,128,256,512,1024,5000)
 mean_iterations = vector("numeric",length=length(ratios))
 mean_ideal = vector("numeric",length=length(ratios))
 
+#Repeat simulations per ratio
 reps = 10
 
+#Used for saving the results of many simulations
 final_data = data.frame(ratios, mean_iterations, mean_ideal)
 
-for (l in 1:length(ratios)){
+for (l in 1:length(ratios)){#Iterate through ratios
   
+  #Set-up for multiple simulations at this ratio
   mean = 0
   iterations = vector(length=reps)
   ideal_it = vector(length=reps)
@@ -241,42 +236,49 @@ for (l in 1:length(ratios)){
   local_weight <<-ratios[l]
   
   for(j in 1:reps){
-
+    
+    #Initialize the field and drones
     field <<- initialize(sparseness, max_particle_conc)
     df_drones <- init_drones()
     
+    #Get the total number of particles in the field in parallel to set up initial values
     total_particles = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
       sum(b) 
     }
     
     total_particles = sum(total_particles)
-    acceptable <- total_particles*0.5
-    ideal_iter <- acceptable/(num_drones*harvest_rate)
-
+    acceptable <- total_particles*0.5 #The "acceptable" no. of particles left to consider the simulation finished
+    ideal_iter <- acceptable/(num_drones*harvest_rate) #Number of iterations if the drones could teleport and see everything
+    
     i = 0
     #saveGIF({
     repeat{
       
+      #Get the total number of particles in the field in parallel to check for simulation completion
       r = foreach(b=iter(field,by="row"), .combine = rbind) %dopar%{
         sum(b) 
       }
       total = sum(r)
       if(total < acceptable){ #Everything is harvested
         print(paste("Ideal iterations: ", ideal_iter))
+        #Save the simulation results to dataframe
         history[j,]$iterations <- i
         history[j,]$ideal_it <- ideal_iter
         break
       }
       
       print(paste("Iteration",i,"% Left: ",total/total_particles))
+      #Step where all drones scan their surroundings
       df_drones <- scan(df_drones)
       
+      #Get the patches that need to be harvested in parallel
       to_harvest <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
         if(field[drone$coord_x, drone$coord_y] > 0){ #Harvest this patch
           return(c(drone$coord_x,drone$coord_y))
         }
       }
       
+      #Process the new locations of drones in parallel
       df_drones <- foreach(drone = iter(df_drones,by="row"), .combine=rbind)%dopar%{
         if(field[drone$coord_x, drone$coord_y] == 0){ #Nothing to harvest
           return (move(drone))
@@ -284,6 +286,7 @@ for (l in 1:length(ratios)){
         return(drone)
       }
       
+      #Harvest all the particles that was found in the previous step
       if(!is.null(to_harvest)){
         for(k in 1:dim(to_harvest)[1]){
           x = to_harvest[k,1]
@@ -295,16 +298,20 @@ for (l in 1:length(ratios)){
       }
       
       i=i+1
-      graph(df_drones,i)
+      graph(df_drones,i) #Graph the current state of the simulation
       
     }
     #}) 
   }
+  #Add the results of the simulation at this ratio to the final dataframe
   final_data[l,]$mean_iterations = mean(history$iterations)
   final_data[l,]$mean_ideal = mean(history$ideal_it)
 }
+
+#save the simulation to a CSV file
 mean(history$iterations)
 name = paste("simulation",Sys.time(),".csv")
 write.csv(final_data, file = name)
 plot(final_data$ratios, final_data$mean_iterations/final_data$mean_ideal)
-stopCluster(cl)
+
+stopCluster(cl) #important to run this line if program stops early! prevents memory leaks
