@@ -15,7 +15,7 @@ local_weight = 50
 global_weight = 1
 
 
-num_drones = 100 #number of drones in simulation
+num_drones = 500 #number of drones in simulation
 speed = 1 #radius of neighborhood that drones are allowed to move in
 vision <<- 2 # "" are allowed to scan at each time-step
 harvest_rate = 1 #no. of plastic particles one drone can pick up per time-step
@@ -215,15 +215,21 @@ cl <<- makeCluster(detectCores())
 registerDoParallel(cl)
 
 #Used for testing multiple global/local weight ratios
-ratios = c(0.5,1,2,4,8,16,32,64,128,256,512,1024,5000)
+ratios = c(0,0.5,1,2,1000)
 mean_iterations = vector("numeric",length=length(ratios))
 mean_ideal = vector("numeric",length=length(ratios))
 
 #Repeat simulations per ratio
-reps = 10
+reps = 5
 
 #Used for saving the results of many simulations
 final_data = data.frame(ratios, mean_iterations, mean_ideal)
+
+#Save the mean particles at each timestep for many simulations
+max_timesteps = 1000
+final_time_data = matrix(0,nrow=max_timesteps,ncol=reps)
+colnames(final_time_data) = c(paste("R",ratios))
+final_time_data = data.frame(final_time_data)
 
 for (l in 1:length(ratios)){#Iterate through ratios
   
@@ -232,6 +238,11 @@ for (l in 1:length(ratios)){#Iterate through ratios
   iterations = vector(length=reps)
   ideal_it = vector(length=reps)
   history = data.frame(iterations,ideal_it)
+  
+  #For tracking the particles at each timestep
+  time_data = matrix(0,nrow=max_timesteps,ncol=reps)
+  colnames(time_data) = c(paste("sim",1:reps))
+  time_data = data.frame(time_data)
   
   local_weight <<-ratios[l]
   
@@ -247,7 +258,7 @@ for (l in 1:length(ratios)){#Iterate through ratios
     }
     
     total_particles = sum(total_particles)
-    acceptable <- total_particles*0.5 #The "acceptable" no. of particles left to consider the simulation finished
+    acceptable <- total_particles*0.05 #The "acceptable" no. of particles left to consider the simulation finished
     ideal_iter <- acceptable/(num_drones*harvest_rate) #Number of iterations if the drones could teleport and see everything
     
     i = 0
@@ -259,6 +270,7 @@ for (l in 1:length(ratios)){#Iterate through ratios
         sum(b) 
       }
       total = sum(r)
+      time_data[i+1,j] = total/total_particles
       if(total < acceptable){ #Everything is harvested
         print(paste("Ideal iterations: ", ideal_iter))
         #Save the simulation results to dataframe
@@ -306,11 +318,13 @@ for (l in 1:length(ratios)){#Iterate through ratios
   #Add the results of the simulation at this ratio to the final dataframe
   final_data[l,]$mean_iterations = mean(history$iterations)
   final_data[l,]$mean_ideal = mean(history$ideal_it)
+  final_time_data[l] = apply(time_data,1,mean)
 }
 
 #save the simulation to a CSV file
 mean(history$iterations)
 name = paste("simulation",Sys.time(),".csv")
+write.csv(final_time_data, file="simulation_time.csv")
 write.csv(final_data, file = name)
 plot(final_data$ratios, final_data$mean_iterations/final_data$mean_ideal)
 
